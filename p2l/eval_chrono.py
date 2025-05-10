@@ -57,6 +57,9 @@ def main(args):
 
     with open(model_list_path) as file:
         model_list = json.load(file)
+        
+    if args.time_align:
+        cp_frequency = checkpoints_with_nums[0][1]
     
     for checkpoint_dir, checkpoint_num in checkpoints_with_nums:
         checkpoint_output_dir = os.path.join(args.output_dir, f"checkpoint-{checkpoint_num}")
@@ -83,7 +86,20 @@ def main(args):
             pipeline_class=P2LPipeline,
         )
         
-        val_sets = [(dataset, val_num) for dataset, val_num in val_datasets if val_num <= checkpoint_num]
+        if args.time_align:
+            with open(args.train_time, 'r') as file: 
+                train_times = json.load(file)
+            with open(args.val_time, 'r') as file:
+                val_times = json.load(file)
+                
+            begin_batch = checkpoint_num - (checkpoint_num % cp_frequency)
+            if begin_batch == checkpoint_num:
+                begin_batch -= cp_frequency
+                
+            largest_train_time = max(train_times[i]['end_tstamp'] for i in range(begin_batch, checkpoint_num))
+            val_sets = [(dataset, val_num) for dataset, val_num in val_datasets if val_times[str(val_num)]['end_tstamp'] < largest_train_time]
+        else: 
+            val_sets = [(dataset, val_num) for dataset, val_num in val_datasets if val_num <= checkpoint_num]
         
         for dataset, val_num in val_sets: 
             output_file = os.path.join(
@@ -152,6 +168,15 @@ if __name__ == "__main__":
     parser.add_argument(
         "--output-dir", "-od", type=str, default="outputs",
         help="Directory to save outputs"
+    )
+    parser.add_argument(
+        "--time-align", action="store_true", help="include for time aligned evals"
+    )
+    parser.add_argument(
+        "--train-time", type=str, help="file containing last times for each batch in train file"
+    )
+    parser.add_argument(
+        "--val-time", type=str, help="file containing last times for each batch in val file"
     )
 
     args = parser.parse_args()
