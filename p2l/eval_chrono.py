@@ -1,5 +1,5 @@
 import argparse
-from model import get_p2l_model, P2LOutputs
+from p2l.model import get_p2l_model, P2LOutputs
 from transformers import pipeline, TextClassificationPipeline, AutoTokenizer
 from huggingface_hub import snapshot_download
 from datasets import Dataset
@@ -12,7 +12,7 @@ import re
 from tqdm.auto import tqdm
 from torch.utils.data import Dataset as TorchDataset
 from glob import glob
-from eval import P2LPipeline, ListDataset
+from p2l.eval import P2LPipeline, ListDataset
 
 def extract_number_from_path(path, prefix):
     pattern = re.compile(f"{prefix}(\\d+)")
