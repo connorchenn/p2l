@@ -60,6 +60,7 @@ def main(args):
         
     if args.time_align:
         cp_frequency = checkpoints_with_nums[0][1]
+        assert cp_frequency == checkpoints_with_nums[1][1] - checkpoints_with_nums[0][1]
     
     for checkpoint_dir, checkpoint_num in checkpoints_with_nums:
         checkpoint_output_dir = os.path.join(args.output_dir, f"checkpoint-{checkpoint_num}")
