@@ -179,9 +179,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--val-time", type=str, help="file containing last times for each batch in val file"
     )
-    
-    if args.time_align and (not args.train_time or not args.val_time):
-        parser.error("--train-time and --val-time required when --time-align is set.")
 
     args = parser.parse_args()
+
+    if args.time_align and (not args.train_time or not args.val_time):
+        parser.error("--train-time and --val-time required when --time-align is set.")
+    
     main(args)
