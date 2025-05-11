@@ -97,7 +97,7 @@ def main(args):
             if begin_batch == checkpoint_num:
                 begin_batch -= cp_frequency
                 
-            largest_train_time = max(train_times[i]['end_tstamp'] for i in range(begin_batch, checkpoint_num))
+            largest_train_time = max(train_times[str(i)]['end_tstamp'] for i in range(begin_batch, checkpoint_num))
             val_sets = [(dataset, val_num) for dataset, val_num in val_datasets if val_times[str(val_num)]['end_tstamp'] < largest_train_time]
         else: 
             val_sets = [(dataset, val_num) for dataset, val_num in val_datasets if val_num <= checkpoint_num]
