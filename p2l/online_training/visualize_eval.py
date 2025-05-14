@@ -57,9 +57,30 @@ def extract_loss(base, output_file):
                 loss = loss_func(head_out, labels, "bag")
                 model_cp_results[cp_num][dataset_num] = loss
             
+    with open(output_file, 'w') as file:
+        json.dump(model_cp_results, file)
+
+def extract_accuracy(base, output_file):
+    model_cp_results = {}
+    # base = '/tmp/output_eps_0.016'
+    for sub_path in tqdm(os.listdir(base)):
+        checkpoint_folder = os.path.join(base, sub_path)
+        if os.path.isdir(checkpoint_folder):
+            cp_num = int(sub_path.split('-')[-1])
+            model_cp_results[cp_num] = {}
+            for base_file in os.listdir(checkpoint_folder):
+                dataset_num = int(base_file.split('.')[0].split('-')[-1])    
+                file_path = os.path.join(checkpoint_folder, base_file)
+                df = parse_eval_output_data(file_path, "bag")
+                head_out, labels = process_head_output(df)
+                loss = accuracy_func(head_out, labels, "bag")
+                model_cp_results[cp_num][dataset_num] = loss
+            
 
     with open(output_file, 'w') as file:
         json.dump(model_cp_results, file)
+        
+        
         
 def plot_cp_results(path, save_dir, model_name):
     os.makedirs(save_dir, exist_ok=True)
@@ -108,13 +129,22 @@ def plot_cp_results(path, save_dir, model_name):
     plt.savefig(f"{save_prefix}_lineplot.png")
     plt.close()
 
-def visualize_eval(eval_path, base, eval_plot_folder):
+def visualize_eval(eval_path, base, eval_plot_folder, accuracy):
     for model_eval in tqdm(eval_path):
+        if accuracy:
+            base = os.path.join(base, 'accuracy')
+        else:
+            base = os.path.join(base, 'loss')
+            
+        os.makedirs(base, exist_ok=True)
         model_name = model_eval.split('/tmp/')[1]
         model_file = f"{model_name}.json"
         output_file = os.path.join(base, model_file)
         if not os.path.exists(output_file):
-            extract_loss(model_eval, output_file)
+            if accuracy:
+                extract_accuracy(model_eval, output_file)
+            else:
+                extract_loss(model_eval, output_file)
 
         plot_cp_results(output_file, eval_plot_folder, model_name)
 
@@ -123,6 +153,7 @@ if __name__ == "__main__":
     parser.add_argument('--model-list', nargs='+', metavar='DIR', help='list of model inference folders to eval')
     parser.add_argument("--output-file", type=str, default='checkpoint_results2', help='folder to save loss results')
     parser.add_argument("--eval-folder", type=str, default='eval_plots2', help='folder to save eval plots')
+    parser.add_argument("--extract-accuracy", action='store_true')
     args = parser.parse_args()
     
-    visualize_eval(args.model_list, args.output_file, args.eval_folder)
+    visualize_eval(args.model_list, args.output_file, args.eval_folder, args.extract_accuracy)
