@@ -97,7 +97,7 @@ def main(args):
             if begin_batch == checkpoint_num:
                 begin_batch -= cp_frequency
                 
-            largest_train_time = max(train_times[i]['end_tstamp'] for i in range(begin_batch, checkpoint_num))
+            largest_train_time = max(train_times[str(i)]['end_tstamp'] for i in range(begin_batch, checkpoint_num))
             val_sets = [(dataset, val_num) for dataset, val_num in val_datasets if val_times[str(val_num)]['end_tstamp'] < largest_train_time]
         else: 
             val_sets = [(dataset, val_num) for dataset, val_num in val_datasets if val_num <= checkpoint_num]
@@ -179,9 +179,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--val-time", type=str, help="file containing last times for each batch in val file"
     )
-    
-    if args.time_align and (not args.train_time or not args.val_time):
-        parser.error("--train-time and --val-time required when --time-align is set.")
 
     args = parser.parse_args()
+
+    if args.time_align and (not args.train_time or not args.val_time):
+        parser.error("--train-time and --val-time required when --time-align is set.")
+    
     main(args)
