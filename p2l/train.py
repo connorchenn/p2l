@@ -188,6 +188,7 @@ def train_model(args):
             CLS_id=tokenizer.cls_token_id,
             num_models=len(model_list),
             linear_head_downsize_factor=linear_head_downsize_factor,
+            attn_implementation='flash_attention_2'
         )
     else:
         model = model_cls.from_pretrained(
@@ -195,6 +196,7 @@ def train_model(args):
             CLS_id=tokenizer.cls_token_id,
             num_models=len(model_list),
             linear_head_downsize_factor=linear_head_downsize_factor,
+            attn_implementation='flash_attention_2'
         )
 
     if model.config.vocab_size < len(tokenizer):
