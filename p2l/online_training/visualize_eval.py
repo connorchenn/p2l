@@ -82,7 +82,7 @@ def extract_accuracy(base, output_file):
         
         
         
-def plot_cp_results(path, save_dir, model_name):
+def plot_cp_results(path, save_dir, model_name, title):
     os.makedirs(save_dir, exist_ok=True)
     save_prefix = os.path.join(save_dir, model_name)
 
@@ -107,7 +107,7 @@ def plot_cp_results(path, save_dir, model_name):
         df, annot=True, fmt=".3f", cmap="viridis_r",
         mask=mask, cbar_kws={'label': 'Loss'}
     )
-    plt.title(model_name, fontsize=16)
+    plt.title(title, fontsize=16)
     plt.xlabel('Dataset Checkpoint', fontsize=14)
     plt.ylabel('Model Checkpoint', fontsize=14)
     plt.tight_layout()
@@ -122,38 +122,63 @@ def plot_cp_results(path, save_dir, model_name):
 
     plt.xlabel('Dataset Checkpoint', fontsize=14)
     plt.ylabel('Loss', fontsize=14)
-    plt.title(model_name, fontsize=16)
+    plt.title(title, fontsize=16)
     plt.grid(True, alpha=0.3)
     plt.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
     plt.tight_layout()
     plt.savefig(f"{save_prefix}_lineplot.png")
     plt.close()
 
-def visualize_eval(eval_path, base, eval_plot_folder, accuracy):
-    for model_eval in tqdm(eval_path):
-        if accuracy:
-            base = os.path.join(base, 'accuracy')
+def visualize_eval(models, base, eval_plot_folder, accuracy):
+    os.makedirs(eval_plot_folder, exist_ok=True)
+    for model_info in models:
+        if len(model_info) == 2:
+            model_eval, eps = model_info
+            title = f'Replay Buffer (ε = {eps}) Validation Loss Across Model and Dataset Checkpoints'
         else:
-            base = os.path.join(base, 'loss')
+            model_eval, gamma, sigma = model_info
+            title = f'Geometric Buffer (γ = {gamma}, σ = {sigma}) Validation Loss Across Model and Dataset Checkpoints'
+    
+        if accuracy:
+            data_base = os.path.join(base, 'accuracy')
+        else:
+            data_base = os.path.join(base, 'loss')
             
-        os.makedirs(base, exist_ok=True)
+        os.makedirs(data_base, exist_ok=True)
         model_name = model_eval.split('/tmp/')[1]
         model_file = f"{model_name}.json"
-        output_file = os.path.join(base, model_file)
+        output_file = os.path.join(data_base, model_file)
         if not os.path.exists(output_file):
+            f'output file {output_file} not found'
             if accuracy:
                 extract_accuracy(model_eval, output_file)
             else:
                 extract_loss(model_eval, output_file)
 
-        plot_cp_results(output_file, eval_plot_folder, model_name)
+        plot_cp_results(output_file, eval_plot_folder, model_name, title)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument('--model-list', nargs='+', metavar='DIR', help='list of model inference folders to eval')
+    replay_models = model_list = [
+        ('/tmp/output_eps_0.2', 0.2), #(file_path, eps_val)
+        ('/tmp/output_eps_0.5', 0.5),
+        ('/tmp/output_eps_0.06', 0.06),
+        ('/tmp/output_eps_0.016', 0.016),
+        ('/tmp/output_eps_0.032', 0.032),
+        ('/tmp/output_eps_0.112', 0.112)
+    ]
+
+    geom_models = [
+        ('/tmp/output-geom-0.995-0.001', 0.995, 0.001), #(file_path, gamma val, sigma_val)
+        ('/tmp/output-geom-0.995-0.0005', 0.995, 0.0005),
+        ('/tmp/output-geom-0.999-0.001', 0.999, 0.001),
+        ('/tmp/output-geom-0.999-0.0005', 0.999, 0.0005),
+        ('/tmp/output-geom-0.9995-0.001', 0.9995, 0.001),
+        ('/tmp/output-geom-0.9995-0.0005', 0.9995, 0.0005),
+    ]
     parser.add_argument("--output-file", type=str, default='checkpoint_results2', help='folder to save loss results')
     parser.add_argument("--eval-folder", type=str, default='eval_plots2', help='folder to save eval plots')
     parser.add_argument("--extract-accuracy", action='store_true')
     args = parser.parse_args()
     
-    visualize_eval(args.model_list, args.output_file, args.eval_folder, args.extract_accuracy)
+    visualize_eval(replay_models + geom_models, args.output_file, args.eval_folder, args.extract_accuracy)
