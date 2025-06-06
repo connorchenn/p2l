@@ -169,8 +169,7 @@ def display_leaderboard(model_path: str, inc_models=None):
     )
     
     # Load pricing data
-    script_dir = os.path.dirname(__file__)
-    pricing_df = pd.read_csv(os.path.join(script_dir, "pricing_table.csv"))
+    pricing_df = pd.read_csv("p2l/pricing_table.csv")
     pricing_df = pricing_df.dropna(subset=['output_token_price'])
     price_map = pd.Series(pricing_df.output_token_price.values, index=pricing_df.model_key).to_dict()
 
