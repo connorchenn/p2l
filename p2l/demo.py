@@ -12,7 +12,45 @@ import time
 from transformers import AutoTokenizer
 from huggingface_hub import snapshot_download
 from auto_eval_utils import registered_helpers
+import openai
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import threading
 
+# Configure OpenAI client
+openai.api_key = os.getenv("OPENAI_API_KEY")
+
+def generate_prompts_from_topic(topic: str) -> list[str]:
+    system_prompt = """You are tasked with generating 10 questions or prompt instructions that broadly represent a given topic. These questions/prompts will be used for benchmarking an LLM (Language Learning Model), so they should be effective in testing an LLM's understanding of the topic.
+
+When creating these questions/prompts, consider the following guidelines:
+- Vary the difficulty level from basic to advanced
+- Include a mix of factual, analytical, and creative questions
+- Cover different aspects and subtopics within the main topic
+- Use a variety of question types (e.g., multiple-choice, open-ended, scenario-based)
+- Avoid overly specific or obscure questions that may not effectively test general knowledge
+- Ensure questions are clear, concise, and unambiguous"""
+
+    user_prompt = f"Generate 10 questions/prompts for the topic: {topic}\n\nOutput as a numbered list without any additional text."
+
+    response = openai.chat.completions.create(
+        model="gpt-4.1-mini",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt}
+        ],
+        temperature=0
+    )
+
+    # Parse the response to extract prompts
+    content = response.choices[0].message.content
+    prompts = []
+    for line in content.split('\n'):
+        line = line.strip()
+        if line and any(line.startswith(f"{i}.") for i in range(1, 51)):
+            prompt = line.split('.', 1)[1].strip()
+            prompts.append(prompt)
+    
+    return prompts
 
 def get_leaderboard(model, data_collator, model_list, prompt):
     processed_data = data_collator(prompt)
@@ -30,16 +68,35 @@ def get_aggregated_leaderboard(model, data_collator, model_list, prompts: list[s
     all_coefs = []
     all_etas = []
     
-    for prompt in prompts:
+    # Thread-safe list for storing results
+    results = [None] * len(prompts)
+    lock = threading.Lock()
+
+    def process_prompt(idx, prompt):
         data = [{"prompt": prompt, "labels": torch.tensor([0, 1])}]
         betas, eta = get_leaderboard(model, data_collator, model_list, data)
         betas = torch.tensor(betas)
+        with lock:
+            results[idx] = (betas, eta)
+
+    # Use ThreadPoolExecutor to process prompts in parallel
+    with ThreadPoolExecutor(max_workers=min(8, len(prompts))) as executor:
+        futures = []
+        for idx, prompt in enumerate(prompts):
+            futures.append(executor.submit(process_prompt, idx, prompt))
+        
+        # Wait for all futures to complete
+        for future in as_completed(futures):
+            future.result()  # This will raise any exceptions that occurred
+
+    # Collect results in order
+    for betas, eta in results:
         all_coefs.append(betas)
         all_etas.append(eta)
-        
 
     all_coefs_tensor = torch.stack(all_coefs)  # shape: (num_prompts, num_models)
     all_etas = torch.tensor(all_etas)
+    all_etas = all_etas.unsqueeze(1)
     output = HeadOutputs(coefs=all_coefs_tensor, eta=all_etas)
 
     # Dummy labels for compatibility
@@ -54,6 +111,7 @@ def get_aggregated_leaderboard(model, data_collator, model_list, prompts: list[s
         loss_type=loss_type
     )
 
+    leaderboard = leaderboard.coefs.cpu().detach().numpy()
     return dict(sorted({
         model_list[i]: leaderboard[i].item() for i in range(len(model_list))
     }.items(), key=lambda kv: kv[1], reverse=True))
@@ -61,8 +119,22 @@ def get_aggregated_leaderboard(model, data_collator, model_list, prompts: list[s
 def display_leaderboard(model_path: str, inc_models=None):
     print("Loading model and configuration...")
     local_repo_path = snapshot_download(
-        repo_id=model_path
-    )
+    repo_id=args.model_path,
+    # allow_patterns=[
+    #     "model.safetensors",
+    #     "tokenizer.json",
+    #     "tokenizer_config.json",
+    #     "special_tokens_map.json",
+    #     "added_tokens.json",
+    #     "vocab.json",
+    #     "merges.txt",
+    #     "config.json",
+    #     "training_args.bin",
+    #     "training_config.json",
+    #     "model_list.json",
+    #     ".gitattributes"
+    # ]
+)
     
     model_list_path = os.path.join(local_repo_path, "model_list.json")
     
@@ -93,94 +165,6 @@ def display_leaderboard(model_path: str, inc_models=None):
     
     print("Model loaded successfully!")
 
-    def _rank_single(prompt: str, progress=gr.Progress()):
-        if not prompt.strip():
-            raise gr.Error("Please enter a prompt before submitting.")
-        
-        progress(0.3, desc="Processing prompt...")
-        time.sleep(0.5)  # Add slight delay for better UX
-        
-        try:
-            data = [{"prompt": prompt, "labels": torch.tensor([0, 1])}]
-            beta, _ = get_leaderboard(model, data_collator, model_list, data)
-            leaderboard = model_rankings = {
-                model_list[i]: beta[i].item() for i in range(len(beta))
-            }
-            ranking = dict(sorted(leaderboard.items(), key=lambda kv: kv[1], reverse=True))
-
-            progress(0.7, desc="Generating rankings...")
-            
-            df = pd.DataFrame(
-                {
-                    "Rank": range(1, len(ranking) + 1),
-                    "Model": list(ranking.keys()),
-                    "Score": [f"{v:.4f}" for v in ranking.values()],
-                }
-            )
-            if inc_models is not None:
-                df = df[df["Model"].isin(inc_models)]
-                
-            progress(1.0, desc="Done!")
-            return df, "Successfully ranked models based on your prompt."
-            
-        except Exception as e:
-            raise gr.Error(f"An error occurred: {str(e)}")
-
-    def _rank_multiple(prompts: str, progress=gr.Progress()):
-        if not prompts.strip():
-            raise gr.Error("Please enter at least one prompt.")
-        
-        # Split prompts by newline and remove empty lines
-        prompt_list = [p.strip() for p in prompts.split('\n') if p.strip()]
-        
-        if not prompt_list:
-            raise gr.Error("Please enter at least one valid prompt.")
-            
-        progress(0.2, desc="Processing prompts...")
-        
-
-        leaderboard = get_aggregated_leaderboard(
-            model=model,
-            data_collator=data_collator,
-            model_list=model_list,
-            prompts=prompt_list,
-            model_type=model_config["model_type"],
-            loss_type=model_config["loss_type"]
-        )
-
-        progress(0.7, desc="Generating aggregated rankings...")
-        
-        df = pd.DataFrame(
-            {
-                "Rank": range(1, len(leaderboard) + 1),
-                "Model": list(leaderboard.keys()),
-                "Aggregated Score": [f"{v:.4f}" for v in leaderboard.values()],
-            }
-        )
-        if inc_models is not None:
-            df = df[df["Model"].isin(inc_models)]
-            
-        progress(1.0, desc="Done!")
-        return (
-            df,
-            f"Successfully ranked models based on {len(prompt_list)} prompts.",
-            gr.update(visible=True),
-            f"Number of prompts processed: {len(prompt_list)}"
-        )
-
-
-    # Example prompts
-    single_example_prompts = [
-        ["Write a Python function to calculate the Fibonacci sequence."],
-        ["Explain the concept of quantum entanglement to a high school student."],
-        ["Create a creative story about a time-traveling archaeologist."],
-    ]
-
-    multi_example_prompts = [
-        ["Write a function to sort a list\nImplement binary search\nCreate a linked list class"],
-        ["Explain photosynthesis\nDescribe the water cycle\nHow does the immune system work"],
-    ]
-
     custom_css = """
     .container { max-width: 900px; margin: auto; padding: 20px; }
     .output-panel { margin-top: 20px; }
@@ -189,108 +173,237 @@ def display_leaderboard(model_path: str, inc_models=None):
     .info-text { font-size: 0.9em; color: #666; margin: 10px 0; }
     """
 
-    with gr.Blocks(title="AI Model Ranking System", theme=gr.themes.Soft(), css=custom_css) as demo:
+    with gr.Blocks(title="ModelMatch", theme=gr.themes.Soft(), css=custom_css) as demo:
         gr.Markdown(
             """
-            # 🎯 AI Model Ranking System
+            # 🎯 ModelMatch
             
-            Evaluate and compare AI models using either single prompts or multiple prompts for aggregated analysis.
+            Evaluate and compare AI models using either individual prompts or topics.
             """
         )
 
         with gr.Tabs() as tabs:
-            # Single Prompt Tab
-            with gr.Tab("Single Prompt Evaluation", id=1):
+            # Individual prompt evaluation tab
+            with gr.Tab("Individual Prompt"):
                 with gr.Column(elem_classes="tab-content"):
                     gr.Markdown(
                         """
-                        ### Single Prompt Evaluation
-                        Enter a prompt to see how different models would perform on this specific task.
+                        ### Individual Prompt Evaluation
+                        Enter a specific prompt to evaluate models on a single task.
                         """
                     )
-                    single_prompt = gr.Textbox(
-                        label="Your Prompt",
-                        placeholder="Enter a task or question...",
+                    prompt_input = gr.Textbox(
+                        label="Prompt",
+                        placeholder="Enter a specific task or question...",
                         lines=4,
                         elem_classes="prompt-input"
                     )
+                    
                     with gr.Row():
-                        single_submit = gr.Button("🔍 Rank Models", variant="primary", scale=2)
-                        single_clear = gr.Button("🔄 Clear", variant="secondary", scale=1)
+                        prompt_submit_btn = gr.Button("🔍 Evaluate Models", variant="primary", scale=2)
+                        prompt_clear_btn = gr.Button("🔄 Clear", variant="secondary", scale=1)
+                    
+                    # Example prompts
+                    example_prompts = [
+                        ["Write a Python function to calculate the Fibonacci sequence."],
+                        ["Explain the concept of quantum entanglement to a high school student."],
+                        ["Create a creative story about a time-traveling archaeologist."],
+                    ]
                     
                     gr.Examples(
-                        examples=single_example_prompts,
-                        inputs=single_prompt,
-                        label="Try these examples"
+                        examples=example_prompts,
+                        inputs=prompt_input,
+                        label="Try these example prompts"
                     )
                     
-                    single_message = gr.Markdown("Enter a prompt above to see rankings")
-                    single_table = gr.Dataframe(
-                        headers=["Rank", "Model", "Score"],
-                        label="Model Rankings"
-                    )
+                    prompt_status = gr.Markdown("")
+                    with gr.Column(visible=False) as prompt_results:
+                        prompt_rankings = gr.Dataframe(
+                            headers=["Rank", "Model", "Score"],
+                            label="Model Rankings"
+                        )
 
-            # Multiple Prompts Tab
-            with gr.Tab("Multiple Prompts Evaluation", id=2):
+            # Topic-based evaluation tab
+            with gr.Tab("Topic Evaluation"):
                 with gr.Column(elem_classes="tab-content"):
                     gr.Markdown(
                         """
-                        ### Multiple Prompts Evaluation
-                        Enter multiple prompts (one per line) to get aggregated model rankings.
-                        This method provides a more comprehensive evaluation across different tasks.
+                        ### Topic-Based Evaluation
+                        Enter a topic and the system will evaluate models according to their performance on the topic.
                         """
                     )
-                    multi_prompt = gr.Textbox(
-                        label="Your Prompts",
-                        placeholder="Enter multiple prompts, one per line...",
-                        lines=8,
+                    topic_input = gr.Textbox(
+                        label="Topic",
+                        placeholder="Enter a topic (e.g., 'Python Programming', 'Climate Change', 'Machine Learning')...",
+                        lines=1,
                         elem_classes="prompt-input"
                     )
+                    
                     with gr.Row():
-                        multi_submit = gr.Button("🔍 Get Aggregated Rankings", variant="primary", scale=2)
-                        multi_clear = gr.Button("🔄 Clear", variant="secondary", scale=1)
+                        topic_submit_btn = gr.Button("🔍 Evaluate Models", variant="primary", scale=2)
+                        topic_clear_btn = gr.Button("🔄 Clear", variant="secondary", scale=1)
+                    
+                    # Example topics
+                    example_topics = [
+                        ["Python Programming"],
+                        ["Climate Change"],
+                        ["Machine Learning"],
+                        ["World History"],
+                        ["Creative Writing"],
+                    ]
                     
                     gr.Examples(
-                        examples=multi_example_prompts,
-                        inputs=multi_prompt,
-                        label="Try these examples"
+                        examples=example_topics,
+                        inputs=topic_input,
+                        label="Try these example topics"
                     )
                     
-                    multi_message = gr.Markdown("Enter prompts above to see aggregated rankings")
-                    multi_table = gr.Dataframe(
-                        headers=["Rank", "Model", "Aggregated Score"],
-                        label="Aggregated Model Rankings"
-                    )
-                    prompt_count = gr.Markdown(visible=False)
+                    topic_status = gr.Markdown("")
+                    with gr.Column(visible=False) as topic_results:
+                        topic_progress = gr.Markdown("", elem_id="topic-progress")
+                        topic_prompt_count = gr.Markdown("")
+                        topic_rankings = gr.Dataframe(
+                            headers=["Rank", "Model", "Aggregated Score"],
+                            label="Model Rankings"
+                        )
 
-        gr.Markdown(
-            """
-            ### 📝 Notes
-            - Higher scores indicate better predicted performance
-            - Rankings are relative and context-dependent
-            - Multiple prompt evaluation provides more robust results
-            """
-        )
+        def process_topic(topic: str, progress=gr.Progress(track_tqdm=True)):
+            if not topic.strip():
+                raise gr.Error("Please enter a topic before submitting.")
+            
+            progress(0.1, desc="Generating prompts from topic...")
+            prompts = generate_prompts_from_topic(topic)
+            
+            if not prompts:
+                raise gr.Error("Failed to generate prompts. Please try again.")
+            
+            progress(0.3, desc="Processing prompts...")
+            
+            try:
+                # Update progress message
+                progress_msg = "⏳ Evaluating prompts: 0/" + str(len(prompts))
+                
+                leaderboard = get_aggregated_leaderboard(
+                    model=model,
+                    data_collator=data_collator,
+                    model_list=model_list,
+                    prompts=prompts,
+                    model_type=model_config["model_type"],
+                    loss_type=model_config["loss_type"]
+                )
+
+                progress(0.8, desc="Generating final rankings...")
+                
+                rankings_df = pd.DataFrame(
+                    {
+                        "Rank": range(1, len(leaderboard) + 1),
+                        "Model": list(leaderboard.keys()),
+                        "Aggregated Score": [f"{v:.4f}" for v in leaderboard.values()],
+                    }
+                )
+                
+                if inc_models is not None:
+                    rankings_df = rankings_df[rankings_df["Model"].isin(inc_models)]
+                
+                progress(1.0, desc="Done!")
+                return (
+                    "",
+                    gr.update(visible=True),
+                    "",  # Clear progress message when done
+                    f"Evaluated models using {len(prompts)} diverse prompts",
+                    rankings_df
+                )
+                
+            except Exception as e:
+                raise gr.Error(f"An error occurred: {str(e)}")
+
+        def evaluate_single_prompt(prompt: str, progress=gr.Progress()):
+            if not prompt.strip():
+                raise gr.Error("Please enter a prompt before submitting.")
+            
+            progress(0.3, desc="Processing prompt...")
+            
+            try:
+                data = [{"prompt": prompt, "labels": torch.tensor([0, 1])}]
+                beta, _ = get_leaderboard(model, data_collator, model_list, data)
+                leaderboard = {
+                    model_list[i]: beta[i].item() for i in range(len(beta))
+                }
+                ranking = dict(sorted(leaderboard.items(), key=lambda kv: kv[1], reverse=True))
+
+                progress(0.7, desc="Generating rankings...")
+                
+                df = pd.DataFrame(
+                    {
+                        "Rank": range(1, len(ranking) + 1),
+                        "Model": list(ranking.keys()),
+                        "Score": [f"{v:.4f}" for v in ranking.values()],
+                    }
+                )
+                if inc_models is not None:
+                    df = df[df["Model"].isin(inc_models)]
+                
+                progress(1.0, desc="Done!")
+                return (
+                    "",
+                    gr.update(visible=True),
+                    df
+                )
+                
+            except Exception as e:
+                raise gr.Error(f"An error occurred: {str(e)}")
 
         # Set up component interactions
-        single_submit.click(
-            fn=_rank_single,
-            inputs=single_prompt,
-            outputs=[single_table, single_message],
+        topic_submit_btn.click(
+            fn=process_topic,
+            inputs=topic_input,
+            outputs=[
+                topic_status,
+                topic_results,
+                topic_progress,
+                topic_prompt_count,
+                topic_rankings
+            ],
         )
-        single_clear.click(
-            fn=lambda: (None, "Enter a prompt to see rankings."),
-            outputs=[single_table, single_message],
+        
+        topic_clear_btn.click(
+            fn=lambda: (
+                "",
+                gr.update(visible=False),
+                "",
+                "",
+                None
+            ),
+            outputs=[
+                topic_status,
+                topic_results,
+                topic_progress,
+                topic_prompt_count,
+                topic_rankings
+            ],
         )
 
-        multi_submit.click(
-            fn=_rank_multiple,
-            inputs=multi_prompt,
-            outputs=[multi_table, multi_message, prompt_count, prompt_count],
+        prompt_submit_btn.click(
+            fn=evaluate_single_prompt,
+            inputs=prompt_input,
+            outputs=[
+                prompt_status,
+                prompt_results,
+                prompt_rankings
+            ],
         )
-        multi_clear.click(
-            fn=lambda: (None, "Enter prompts to see aggregated rankings.", gr.update(visible=False), ""),
-            outputs=[multi_table, multi_message, prompt_count, prompt_count],
+        
+        prompt_clear_btn.click(
+            fn=lambda: (
+                "",
+                gr.update(visible=False),
+                None
+            ),
+            outputs=[
+                prompt_status,
+                prompt_results,
+                prompt_rankings
+            ],
         )
 
     demo.launch(share=True)
