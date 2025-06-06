@@ -1,12 +1,13 @@
 import argparse
 import gradio as gr
+import sys
+import os
 from model import get_tokenizer, get_p2l_model, HeadOutputs
 from dataset import DataCollator
 import json
 import pandas as pd
 from huggingface_hub import hf_hub_download
 import yaml
-import os
 import torch
 import time
 from transformers import AutoTokenizer
@@ -15,6 +16,12 @@ from auto_eval_utils import registered_helpers
 import openai
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import threading
+import numpy as np
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
+from route.cost_optimizers import SimpleLPCostOptimizer, UnfulfillableException
+
+# Add the project root to the Python path to allow importing from the 'route' module
 
 # Configure OpenAI client
 openai.api_key = os.getenv("OPENAI_API_KEY")
@@ -161,6 +168,12 @@ def display_leaderboard(model_path: str, inc_models=None):
         local_files_only=True,
     )
     
+    # Load pricing data
+    script_dir = os.path.dirname(__file__)
+    pricing_df = pd.read_csv(os.path.join(script_dir, "pricing_table.csv"))
+    pricing_df = pricing_df.dropna(subset=['output_token_price'])
+    price_map = pd.Series(pricing_df.output_token_price.values, index=pricing_df.model_key).to_dict()
+
     model.eval()
     
     print("Model loaded successfully!")
@@ -267,6 +280,36 @@ def display_leaderboard(model_path: str, inc_models=None):
                             label="Model Rankings"
                         )
 
+            # Cost Optimizer tab
+            with gr.Tab("Cost Optimizer"):
+                with gr.Column(elem_classes="tab-content"):
+                    gr.Markdown(
+                        """
+                        ### Cost-Optimal Model Routing
+                        Find the best model for a given prompt within a specific cost budget.
+                        """
+                    )
+                    cost_prompt_input = gr.Textbox(
+                        label="Prompt",
+                        placeholder="Enter a specific task or question...",
+                        lines=4,
+                        elem_classes="prompt-input"
+                    )
+                    cost_slider = gr.Slider(
+                        minimum=0.1,
+                        maximum=80.0,
+                        value=10.0,
+                        step=0.1,
+                        label="Max Cost per 1M Output Tokens ($)",
+                    )
+                    with gr.Row():
+                        cost_submit_btn = gr.Button("Find Best Model", variant="primary", scale=2)
+                        cost_clear_btn = gr.Button("Clear", variant="secondary", scale=1)
+                    
+                    with gr.Group(visible=False) as cost_results_group:
+                        selected_model_output = gr.Textbox(label="Recommended Model", interactive=False)
+                        model_details_output = gr.Markdown()
+
         def process_topic(topic: str, progress=gr.Progress(track_tqdm=True)):
             if not topic.strip():
                 raise gr.Error("Please enter a topic before submitting.")
@@ -353,6 +396,55 @@ def display_leaderboard(model_path: str, inc_models=None):
             except Exception as e:
                 raise gr.Error(f"An error occurred: {str(e)}")
 
+        def optimize_cost(prompt: str, cost: float, progress=gr.Progress()):
+            if not prompt.strip():
+                raise gr.Error("Please enter a prompt before submitting.")
+            
+            progress(0.3, desc="Getting model scores...")
+            # Get scores for all models
+            data = [{"prompt": prompt, "labels": torch.tensor([0, 1])}]
+            beta, _ = get_leaderboard(model, data_collator, model_list, data)
+            model_scores_map = {model_list[i]: beta[i].item() for i in range(len(beta))}
+
+            progress(0.6, desc="Filtering models by price...")
+            # Filter models that have a price
+            routable_models = []
+            routable_scores = []
+            routable_costs = []
+            
+            for model_name in model_list:
+                if model_name in price_map:
+                    routable_models.append(model_name)
+                    routable_scores.append(model_scores_map[model_name])
+                    routable_costs.append(price_map[model_name])
+            
+            if not routable_models:
+                raise gr.Error("No models with pricing information found.")
+
+            progress(0.8, desc="Optimizing for cost...")
+            # Call the optimizer
+            try:
+                selected_model = SimpleLPCostOptimizer.select_model(
+                    cost=cost,
+                    model_list=routable_models,
+                    model_costs=np.array(routable_costs),
+                    model_scores=np.array(routable_scores),
+                )
+            except UnfulfillableException as e:
+                raise gr.Error(str(e))
+            
+            # Prepare output
+            selected_score = model_scores_map[selected_model]
+            selected_cost = price_map[selected_model]
+            details_md = f"**Expected Score:** {selected_score:.4f}<br>**Cost:** ${selected_cost:.4f} per 1M output tokens"
+
+            progress(1.0, desc="Done!")
+            return (
+                gr.update(visible=True),
+                selected_model,
+                details_md
+            )
+
         # Set up component interactions
         topic_submit_btn.click(
             fn=process_topic,
@@ -404,6 +496,21 @@ def display_leaderboard(model_path: str, inc_models=None):
                 prompt_results,
                 prompt_rankings
             ],
+        )
+
+        cost_submit_btn.click(
+            fn=optimize_cost,
+            inputs=[cost_prompt_input, cost_slider],
+            outputs=[cost_results_group, selected_model_output, model_details_output],
+        )
+
+        cost_clear_btn.click(
+            fn=lambda: (
+                gr.update(visible=False),
+                "",
+                ""
+            ),
+            outputs=[cost_results_group, selected_model_output, model_details_output],
         )
 
     demo.launch(share=True)
