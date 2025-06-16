@@ -69,25 +69,25 @@ def translate_val_data(
 
 
 class DataCollator:
-    def __init__(self, tokenizer, max_length, weight=None, reweight_scale=None):
+    def __init__(self, tokenizer, max_length, weight=None, reweight_scale=None, include_labels=False):
         self.tokenizer: PreTrainedTokenizer = tokenizer
         self.max_length: int = max_length
         self.weight: bool = weight
         self.reweight_scale: float = reweight_scale
         self.first = True
+        self.include_labels = include_labels
 
     def __call__(self, data):
-
         prompts = []
 
         for seq in data:
-
             if isinstance(seq["prompt"], str):
                 prompts.append([{"role": "user", "content": seq["prompt"]}])
             else:
                 prompts.append([{"role": "user", "content": turn} for turn in seq["prompt"]])
         
-        labels = torch.tensor([seq["labels"].tolist() for seq in data])
+        if self.include_labels:
+            labels = torch.tensor([seq["labels"].tolist() for seq in data])
 
         formatted_prompts = self.tokenizer.apply_chat_template(
             prompts,
@@ -122,8 +122,10 @@ class DataCollator:
         out = {
             "input_ids": encoded["input_ids"],
             "attention_mask": encoded["attention_mask"],
-            "labels": labels,
         }
+
+        if self.include_labels:
+            out['labels'] = labels
 
         if self.weight:
             if "weight" in data[0]:
@@ -134,3 +136,29 @@ class DataCollator:
                 out["weights"] = None
 
         return out
+    
+def generate_online_labels(model_list, batch_data):
+    '''
+    generates labels for online learning, adds to model list if it doesnt exist already
+    '''
+    labels = []
+    for seq in batch_data:
+        model_a, model_b, winner = seq['model_a'], seq['model_b'], seq['winner']
+
+        if model_a not in model_list:
+            model_list.append(model_a)
+        if model_b not in model_list:
+            model_list.append(model_b)
+
+        index_a, index_b = model_list.index(model_a), model_list.index(model_b)
+
+        if winner == "model_a":
+            labels.append([index_a, index_b, 0])
+        elif winner == "model_b":
+            labels.append([index_b, index_a, 0])
+        elif winner == "tie":
+            labels.append([index_a, index_b, 1])
+        else: #tie (bothbad)
+            labels.append([index_a, index_b, 2])
+
+    return torch.tensor(labels)

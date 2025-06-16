@@ -10,18 +10,28 @@ import torch.distributed as dist
 from transformers import set_seed
 from dataset import DataCollator, get_dataset, generate_online_labels
 from model import get_p2l_model, get_tokenizer
-from replay_buffer import ReplayBuffer
 from torch.utils.data import Sampler
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 from typing import Optional
-from huggingface_hub import HfApi
-from schedulers import get_scheduler
+from huggingface_hub import HfApi, hf_hub_download, snapshot_download
+import datetime
 
 def train_model(args):
+    local_checkpoint_path = None
+    config = None
 
-    with open(args.config, "r") as file:
-        config = yaml.safe_load(file)
+    if args.checkpoint:
+        print(f"Downloading checkpoint from Hugging Face hub: {args.checkpoint}")
+        local_checkpoint_path = snapshot_download(repo_id=args.checkpoint)
+        
+        training_config_path = os.path.join(local_checkpoint_path, "training_config.json")
+        
+        with open(training_config_path) as f:
+            config = json.load(f)
+    else:
+        with open(args.config_path) as f:
+            config = yaml.safe_load(f)
 
     #project name
     proj_name = config["proj_name"]
@@ -33,6 +43,7 @@ def train_model(args):
     train_data_path = config["train_data_path"]
     val_data_path = config["val_data_path"]
     output_dir = config["output_dir"]
+    #get repo id
     pretrain_model_name = config["pretrain_model_name"]
     # Prompts will be truncted to this length
     max_length = config["max_length"]
@@ -48,10 +59,6 @@ def train_model(args):
 
     #get wandb entity for logging
     wandb_entity = config.get("wandb_entity", None)
-    #custom learning rate scheduler
-    custom_scheduler = config.get("custom_scheduler", None)
-    # Whether or not to use experience replay, contains limit, ratio, and minimum iterations till sampling
-    experience_replay = config.get("experience_replay", None)
     chat_template = config.get("chat_template", None)
     # Downsize the rank of the classification head.
     linear_head_downsize_factor = config.get("linear_head_downsize_factor", None)
@@ -74,14 +81,8 @@ def train_model(args):
         os.makedirs(output_dir)
 
     output_path = os.path.join(output_dir, proj_name)
-
-    if args.checkpoint:
-        resume_from_checkpoint = args.checkpoint
-        print("resuming from checkpoint")
-    else:
-        resume_from_checkpoint = False
-
-    if not resume_from_checkpoint:
+    
+    if not local_checkpoint_path:
         version = 1
         while os.path.exists(output_path):
             output_path = output_path.replace(f"_{version - 1}", "")
@@ -96,10 +97,6 @@ def train_model(args):
         chat_template,
         pad_token_if_none=pad_token_if_none,
         cls_token_if_none=cls_token_if_none,
-    )
-
-    data_collator = DataCollator(
-        tokenizer, max_length, weight=weighted_loss, reweight_scale=reweight_scale, include_labels=False
     )
 
     train_data = get_dataset(
@@ -128,17 +125,17 @@ def train_model(args):
         init_type = init_type,
     )
 
-    if resume_from_checkpoint:
-        print(f"Loading model from checkpoint: {resume_from_checkpoint}")
+    if local_checkpoint_path:
+        print(f"Loading model from local checkpoint: {local_checkpoint_path}")
         model = model_cls.from_pretrained(
-            resume_from_checkpoint,
+            local_checkpoint_path,
             CLS_id=tokenizer.cls_token_id,
             num_models=1000,
             linear_head_downsize_factor=linear_head_downsize_factor,
         )
         
-        #TODO: load model list, load experience replay 
-        
+        with open(os.path.join(local_checkpoint_path, "model_list.json"), "r") as f:
+            model_list = json.load(f)
     else:
         model = model_cls.from_pretrained(
             pretrain_model_name,
@@ -148,8 +145,11 @@ def train_model(args):
         )
 
         model_list = []
-        if experience_replay:
-            replay_buffer = ReplayBuffer(experience_replay['limit'])
+
+    data_collator = DataCollator(
+        tokenizer, max_length, weight=weighted_loss, reweight_scale=reweight_scale, include_labels=False
+    )
+        
 
     with open(deepspeed_config_path) as f:
         deepspeed_config = json.load(f)  
@@ -176,58 +176,35 @@ def train_model(args):
         shuffle=True,
         collate_fn=lambda x: x)
 
-    #ratio of number of new data points
-    if experience_replay:
-        novel_size = int(batch_size * experience_replay['ratio'])
-        replay_size = batch_size - novel_size
+  
 
-        train_dataloader = DataLoader(
-            train_data, 
-            batch_size=novel_size,
-            shuffle=False,   #change shuffling?
-            collate_fn=lambda x: x) 
+    train_dataloader = DataLoader(
+        train_data,  
+        batch_size=batch_size, 
+        shuffle=True,   
+        collate_fn=lambda x: x) 
+
+    if local_checkpoint_path:
+        model_engine, optimizer, _, _ = deepspeed.initialize(
+            model=model,
+            model_parameters=model.parameters(),
+            config=deepspeed_config,
+        )
+        model_engine.load_checkpoint(load_dir=local_checkpoint_path, load_optimizer_states=True)
     else:
-        train_dataloader = DataLoader(
-            train_data,  
-            batch_size=batch_size, 
-            shuffle=False,   #change shuffling?
-            collate_fn=lambda x: x) 
-
-    if (not resume_from_checkpoint):
-        if custom_scheduler:
-            model_engine, _, _, scheduler = deepspeed.initialize( #using our own dataloader and scheduler
-                model=model,
-                model_parameters=model.parameters(),
-                config=deepspeed_config,
-                lr_scheduler = lambda optimizer: get_scheduler(optimizer, custom_scheduler["type"], custom_scheduler["params"])
-            )
-        else:
-            model_engine, _, _, _ = deepspeed.initialize( #using our own dataloader and scheduler
-                model=model,
-                model_parameters=model.parameters(),
-                config=deepspeed_config,
-            )
-
-    #TODO handle cases for resuming from checkpoint
-
-    
+        model_engine, optimizer, _, _ = deepspeed.initialize( 
+            model=model,
+            model_parameters=model.parameters(),
+            config=deepspeed_config,
+        )
+        
     train_loss = 0.0
     data_cnt = 0
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     
     model_engine.to(device)
     model_engine.train()
-    for i, novel_data in enumerate(tqdm(train_dataloader)):
-        if experience_replay:
-            if i > experience_replay['min_iter']:
-                replay_data = replay_buffer.sample(replay_size)
-                batch_data = novel_data + replay_data
-            else:
-                batch_data = novel_data 
-            replay_buffer.add(novel_data) #add current batch into old replay    
-        else:
-            batch_data = novel_data
-
+    for i, batch_data in enumerate(tqdm(train_dataloader)):
         data = data_collator(batch_data)
 
         #manually create the labels
@@ -237,7 +214,7 @@ def train_model(args):
         train_loss += outputs.loss.cpu().item() * len(batch_data)
         data_cnt += len(batch_data)
 
-        model_engine.step() #steps both optimizer and scheduler
+        model_engine.step() 
 
         if model_engine.is_gradient_accumulation_boundary():
             local_loss = torch.tensor([train_loss], device=device)
@@ -256,10 +233,7 @@ def train_model(args):
                 print(f" Step: {i}, Global Train Loss: {global_loss}, Grad Norm: {grad_norm}")
 
                 if wandb_entity:
-                    if custom_scheduler:
-                        run.log({"train/loss": global_loss, "train/lr": scheduler.get_last_lr()[0], "train/step": i, "train/grad_norm": grad_norm})
-                    else:
-                        run.log({"train/loss": global_loss, "train/step": i, "train/grad_norm": grad_norm})
+                    run.log({"train/loss": global_loss, "train/step": i, "train/grad_norm": grad_norm})
 
             train_loss = 0.0
             data_cnt = 0
@@ -284,21 +258,21 @@ def train_model(args):
             global_loss = local_loss / len(val_data)
             print(f"Val Loss: {global_loss}")
 
-    #TODO: SAVE MODEL STATES
-
-    
+    # Save model and optimizer states
+    model_engine.save_checkpoint(output_path)
     
     if LOCAL_RANK <= 0:
         if wandb_entity:
             run.finish()
 
-        # Save the model list so we know which models this model was trained on. The model list is in order of first appearance
         with open(os.path.join(output_path, "model_list.json"), "w") as fout:
             json.dump(model_list, fout, indent=1)
 
         if args.push_to_hf:
             api = HfApi()
-            repo_id = config.get("repo_id", f"p2el/{proj_name}")
+            # Add current date to repo name
+            today_str = datetime.datetime.now().strftime("%Y%m%d")
+            repo_id = config.get("repo_id", f"p2el/{proj_name}-{today_str}")
             assert not api.repo_exists(
                 repo_id=repo_id, repo_type="model"
             ), "repo already exists"
@@ -308,13 +282,14 @@ def train_model(args):
                 folder_path=output_path,
                 repo_id=repo_id,
                 repo_type="model",
+                ignore_patterns=None  # include deepspeed
             )
             print("pushed to hub")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--config", type=str
+        "--config-path", type=str, help="Path to config file"
     )
     parser.add_argument(
         "--checkpoint",
@@ -328,6 +303,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--push-to-hf",
         action="store_true",
+        default=True,
         help="True if push directly to huggingface",
     )
     parser.add_argument(
@@ -336,5 +312,5 @@ if __name__ == "__main__":
         help="If flagged eval will not end at end of training loop.",
     )
     args = parser.parse_args()
-
+    
     train_model(args)
