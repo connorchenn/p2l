@@ -69,7 +69,7 @@ def translate_val_data(
 
 
 class DataCollator:
-    def __init__(self, tokenizer, max_length, weight=None, reweight_scale=None, include_labels=False):
+    def __init__(self, tokenizer, max_length, weight=None, reweight_scale=None, include_labels=True):
         self.tokenizer: PreTrainedTokenizer = tokenizer
         self.max_length: int = max_length
         self.weight: bool = weight
