@@ -1,7 +1,6 @@
 from datasets import load_from_disk
 from collections import defaultdict
 from tqdm import tqdm
-import random
 import json
 import os
 import numpy as np
@@ -11,13 +10,17 @@ from datasets import Dataset
 
 
 
-def generate_geom(chrono_train_data, batch_size, gamma, eps, tstamp_file, use_min, save_data):
+def generate_geom(chrono_train_data, batch_size, gamma, eps, tstamp_file, use_min, save_data, save_batch_every, save_folder):
     get_tstamp = bool(tstamp_file)
+    
+    if save_batch_every is not None:
+        batch_tracker = {}
+        batch_tracker_list = []
                 
     if use_min:
-        save_path = f'chrono_data/geom_gamma_{gamma}_eps_{eps}_min'
+        save_path = f'{save_folder}/geom_gamma_{gamma}_eps_{eps}_min'
     else:
-        save_path = f'chrono_data/geom_gamma_{gamma}_eps_{eps}'
+        save_path = f'{save_folder}/geom_gamma_{gamma}_eps_{eps}'
         
     np.random.seed(42)
 
@@ -32,6 +35,8 @@ def generate_geom(chrono_train_data, batch_size, gamma, eps, tstamp_file, use_mi
         tstamps = defaultdict(dict)
 
     curr_batch = 0
+    full_batch = 0
+    
     for i in tqdm(range(num_data)):
         model_a = chrono_data[i]['model_a']
         model_b = chrono_data[i]['model_b']
@@ -46,6 +51,7 @@ def generate_geom(chrono_train_data, batch_size, gamma, eps, tstamp_file, use_mi
             
         num = np.random.geometric(p) - 1 
         cnt = 0
+            
         
         if get_tstamp:
             tstamps[curr_batch]['end'] = i
@@ -54,7 +60,18 @@ def generate_geom(chrono_train_data, batch_size, gamma, eps, tstamp_file, use_mi
             
         while (len(batch[curr_batch + num + cnt]) == batch_size):
             cnt += 1
+            
         batch[curr_batch + num + cnt].append(i)  
+        
+        #if we are at a checkpoint, save which is the lastest batch appearance (for checkpointing during training)
+        
+        #find latest full batch
+        while len(batch[full_batch]) == batch_size:
+            full_batch += 1
+        
+        if ((i + 1) % (save_batch_every * batch_size) == 0) or (i == num_data - 1):
+            batch_tracker[(i+1) // batch_size] = full_batch
+            batch_tracker_list.append(full_batch)
         
         if (num + cnt > 0) and get_tstamp:
             tstamps[curr_batch + num + cnt]['end'] = i
@@ -72,6 +89,14 @@ def generate_geom(chrono_train_data, batch_size, gamma, eps, tstamp_file, use_mi
         if len(batch[end_idx]) < batch_size:
             end_idx -= 1
             break
+        
+    if save_batch_every is not None:
+        tracker = {}
+        tracker['dict'] = batch_tracker
+        tracker['list'] = batch_tracker_list
+        
+        with open(f'{save_path}_batch_tracker.json', 'w') as file:
+            json.dump(tracker, file)
     
         
     if get_tstamp:
@@ -120,6 +145,16 @@ if __name__ == "__main__":
         dest="save_data", 
         help="disables saving the dataset if set"
     )
+    parser.add_argument(
+        "--save-batch-every", 
+        type=int, 
+        help="store the last full batch appearance for each args.save_batch_every batches (for evaluation)"
+    )
+    parser.add_argument(
+        "--save-folder",
+        type=str,
+        help="folder to save the dataset"
+    )
 
     args = parser.parse_args()
-    generate_geom(args.chrono_train_data, args.batch_size, args.gamma, args.eps, args.tstamp_file, args.use_min, args.save_data)
+    generate_geom(args.chrono_train_data, args.batch_size, args.gamma, args.eps, args.tstamp_file, args.use_min, args.save_data, args.save_batch_every, args.save_folder)
