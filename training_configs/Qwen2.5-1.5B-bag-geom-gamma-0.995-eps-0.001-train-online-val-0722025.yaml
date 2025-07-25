@@ -1,10 +1,10 @@
-proj_name: Qwen2.5-1.5B-bag-shuffled-train-online-val-0722025
+proj_name: Qwen2.5-1.5B-bag-geom-gamma-0.995-eps-0.001-train-online-val-0722025
 learning_rate: 8.0e-6
 adam_epsilon: 1.0e-8
 batch_size: 4
 max_length: 16384
 num_train_epochs: 1
-train_data_path: /root/shuffled_train_data
+train_data_path: /root/geom_gamma_0.995_eps_0.001_min
 val_data_path: p2el/canonical_bt_val_data_11092024
 output_dir: 'training_outputs'
 pretrain_model_name: Qwen/Qwen2.5-1.5B-Instruct
@@ -17,3 +17,4 @@ weighted_loss: false
 deepspeed_config_path: deepspeed/zero1.json
 init_type: reset_params
 load_train_data_from_disk: true
+save_at_batches: [70, 130, 163, 267, 407, 642, 823, 1126, 1424, 1675, 1932, 2205, 2529, 2686]

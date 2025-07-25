@@ -16,7 +16,7 @@ class CustomSaveCallback(TrainerCallback):
         self.save_at_batches = set(save_at_batches) if save_at_batches else set()
         self.output_dir = output_dir
         
-    def on_step_end(self, args, state, control):
+    def on_step_end(self, args, state, control, **kwargs):
         current_batch = state.global_step
         
         if current_batch in self.save_at_batches:
@@ -25,7 +25,7 @@ class CustomSaveCallback(TrainerCallback):
         
         return control
     
-    def on_save(self, args, state, control):
+    def on_save(self, args, state, control, **kwargs):
         current_batch = state.global_step
         
         if current_batch in self.save_at_batches:
