@@ -3,12 +3,35 @@ import os
 import yaml
 import json
 import random
-from transformers import Trainer, TrainingArguments, set_seed
+from transformers import Trainer, TrainingArguments, set_seed, TrainerCallback
 from p2l.dataset import DataCollator, get_model_list, get_dataset, translate_val_data
 from p2l.model import get_p2l_model, get_tokenizer
 from torch.utils.data import Sampler
 from typing import Optional
 from huggingface_hub import HfApi
+
+# Custom callback to save at specific batch indices
+class CustomSaveCallback(TrainerCallback):
+    def __init__(self, save_at_batches, output_dir):
+        self.save_at_batches = set(save_at_batches) if save_at_batches else set()
+        self.output_dir = output_dir
+        
+    def on_step_end(self, args, state, control):
+        current_batch = state.global_step
+        
+        if current_batch in self.save_at_batches:
+            print(f"Saving checkpoint at batch {current_batch} (step {state.global_step})")
+            control.should_save = True
+        
+        return control
+    
+    def on_save(self, args, state, control):
+        current_batch = state.global_step
+        
+        if current_batch in self.save_at_batches:
+            print(f"Checkpoint saved for batch {current_batch}")
+        
+        return control
 
 # Want control over data ordering, use no shuffle trainer.
 class NoShuffleTrainer(Trainer):
@@ -65,6 +88,8 @@ def train_model(args):
     train_head_only = config.get("train_head_only", False)
     load_train_data_from_disk = config.get("load_train_data_from_disk", False)
     load_val_data_from_disk = config.get("load_val_data_from_disk", False)
+    # List of batch indices to save checkpoints at (e.g., [10, 25, 256])
+    save_at_batches = config.get("save_at_batches", None)
 
     LOCAL_RANK = int(os.environ.get("LOCAL_RANK", -1))
 
@@ -207,12 +232,19 @@ def train_model(args):
         print("Freezing transformer, only training head.")
         model.freeze_transformer()
 
+    # Initialize callbacks
+    callbacks = []
+    if save_at_batches:
+        print(f"Will save checkpoints at batches: {save_at_batches}")
+        callbacks.append(CustomSaveCallback(save_at_batches, output_path))
+
     trainer = NoShuffleTrainer(
         model=model,
         args=training_args,
         train_dataset=train_data.with_format("torch"),
         # eval_dataset=val_data.with_format("torch"),
         data_collator=data_collator,
+        callbacks=callbacks,
     )
 
     print("begin training")
