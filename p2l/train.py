@@ -12,7 +12,7 @@ from huggingface_hub import HfApi
 
 # Want control over data ordering, use no shuffle trainer.
 class NoShuffleTrainer(Trainer):
-    def _get_train_sampler(self) -> Optional[Sampler]:
+    def _get_train_sampler(self, train_dataset) -> Optional[Sampler]:
         return None
 
 
