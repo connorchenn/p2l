@@ -87,8 +87,6 @@ def generate_expo(chrono_train_data, batch_size, gamma, mu, tstamp_file, use_min
                 batch_tracker[(i+1) // batch_size] = full_batch
                 batch_tracker_list.append(full_batch)
     
-    print("PROCESSED COUNT", processed_count)
-    raise ArithmeticError
     end_idx = 0
     while True:
         assert len(batch[end_idx]) <= batch_size
