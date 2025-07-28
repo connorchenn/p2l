@@ -99,6 +99,13 @@ def main(args):
                 
             largest_train_time = max(train_times[str(i)]['end_tstamp'] for i in range(begin_batch, checkpoint_num))
             val_sets = [(dataset, val_num) for dataset, val_num in val_datasets if val_times[str(val_num)]['end_tstamp'] < largest_train_time]
+        elif args.online_align:
+            with open(args.online_align, 'r') as file:
+                online_align = json.load(file)
+                
+            set_conversion = online_align['dict']
+            reverse_conversion = {int(v): int(k) for k, v in set_conversion.items()}
+            val_sets = [(dataset, reverse_conversion[val_num]) for dataset, val_num in val_datasets if val_num <= reverse_conversion[checkpoint_num]]
         else: 
             val_sets = [(dataset, val_num) for dataset, val_num in val_datasets if val_num <= checkpoint_num]
         
@@ -172,6 +179,9 @@ if __name__ == "__main__":
     )
     parser.add_argument(
         "--time-align", action="store_true", help="include for time aligned evals"
+    )
+    parser.add_argument(
+        "--online-align", type=str, help="json path for online aligned evals (eval after time t)"
     )
     parser.add_argument(
         "--train-time", type=str, help="file containing last times for each batch in train file"
