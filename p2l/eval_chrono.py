@@ -105,7 +105,7 @@ def main(args):
                 
             set_conversion = online_align['dict']
             reverse_conversion = {int(v): int(k) for k, v in set_conversion.items()}
-            val_sets = [(dataset, reverse_conversion[val_num]) for dataset, val_num in val_datasets if val_num <= reverse_conversion[checkpoint_num]]
+            val_sets = [(dataset, val_num) for dataset, val_num in val_datasets if val_num <= reverse_conversion[checkpoint_num]]
         else: 
             val_sets = [(dataset, val_num) for dataset, val_num in val_datasets if val_num <= checkpoint_num]
         
