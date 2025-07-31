@@ -128,24 +128,31 @@ def plot_cp_results(path, save_dir, model_name, title):
     plt.tight_layout()
     plt.savefig(f"{save_prefix}_lineplot.png")
     plt.close()
+    print(f"Saved plot to {save_prefix}_lineplot.png and {save_prefix}_heatmap.png")
 
 def visualize_eval(models, base, eval_plot_folder, accuracy):
     os.makedirs(eval_plot_folder, exist_ok=True)
     for model_info in models:
+        if len(model_info) == 1:
+            model_eval = model_info[0]
+            title = f'Validation Loss Across Model and Dataset Checkpoints for {model_eval.split('/')[-1]}'
         if len(model_info) == 2:
             model_eval, eps = model_info
             title = f'Replay Buffer (ε = {eps}) Validation Loss Across Model and Dataset Checkpoints'
-        else:
+        elif len(model_info) == 3:
             model_eval, gamma, sigma = model_info
             title = f'Geometric Buffer (γ = {gamma}, σ = {sigma}) Validation Loss Across Model and Dataset Checkpoints'
-    
+        elif len(model_info) == 4:
+            model_eval, gamma, mu, step_size = model_info
+            title = f'Exponential Buffer (γ = {gamma}, μ = {mu}, step size = {step_size}) Validation Loss Across Model and Dataset Checkpoints'
+        
         if accuracy:
             data_base = os.path.join(base, 'accuracy')
         else:
             data_base = os.path.join(base, 'loss')
             
         os.makedirs(data_base, exist_ok=True)
-        model_name = model_eval.split('/tmp/')[1]
+        model_name = model_eval.split('/')[-1]
         model_file = f"{model_name}.json"
         output_file = os.path.join(data_base, model_file)
         if not os.path.exists(output_file):
