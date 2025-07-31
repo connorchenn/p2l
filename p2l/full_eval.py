@@ -1,5 +1,5 @@
-from eval_chrono import main as eval_chrono_main
-from online_training.visualize_eval import visualize_eval
+from p2l.eval_chrono import main as eval_chrono_main
+from p2l.online_training.visualize_eval import visualize_eval
 import argparse
 import shutil
 import os
