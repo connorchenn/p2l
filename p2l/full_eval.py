@@ -59,9 +59,6 @@ if __name__ == "__main__":
         "--val-time", type=str, help="file containing last times for each batch in val file"
     )
     parser.add_argument(
-        "--save-df", action="store_true", help="save dataframe to json"
-    )
-    parser.add_argument(
         "--eval-folder", type=str, default='eval_plots2', help='folder to save eval plots'
     )
     args = parser.parse_args()
