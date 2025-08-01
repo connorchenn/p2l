@@ -6,11 +6,12 @@ import os
 
 def main(args):
     eval_chrono_main(args)
-    visualize_eval(args.output_dir, args.eval_folder, accuracy=False)
+    visualize_eval(models=args.output_dir, base=args.eval_folder, eval_plot_folder=args.eval_folder, accuracy=False)
     
     if os.path.exists(args.output_dir):
         shutil.rmtree(args.output_dir)
-        print(f"Deleted validation results folder: {args.output_dir}")
+        shutil.rmtree('/root/.cache/huggingface/hub')
+        print(f"Deleted validation results folder: {args.output_dir} and huggingface cache")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()

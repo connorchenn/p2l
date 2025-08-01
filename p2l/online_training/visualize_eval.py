@@ -9,8 +9,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
 sys.path.append('..')
-from auto_eval_utils import registered_simple_metrics, registered_helpers
-from model import HeadOutputs
+from p2l.auto_eval_utils import registered_simple_metrics, registered_helpers
+from p2l.model import HeadOutputs
 from datasets import load_from_disk, Dataset
 from tqdm import tqdm
 
@@ -135,7 +135,7 @@ def visualize_eval(models, base, eval_plot_folder, accuracy):
     for model_info in models:
         if len(model_info) == 1:
             model_eval = model_info[0]
-            title = f'Validation Loss Across Model and Dataset Checkpoints for {model_eval.split('/')[-1]}'
+            title = f"Validation Loss Across Model and Dataset Checkpoints for {model_eval.split('/')[-1]}"
         if len(model_info) == 2:
             model_eval, eps = model_info
             title = f'Replay Buffer (ε = {eps}) Validation Loss Across Model and Dataset Checkpoints'
