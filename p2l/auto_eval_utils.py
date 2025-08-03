@@ -11,7 +11,7 @@ from scipy.optimize import minimize
 
 
 from scipy.stats import kendalltau, spearmanr
-from model import (
+from p2l.model import (
     registered_losses,
     HeadOutputs,
     registered_aggr_models,

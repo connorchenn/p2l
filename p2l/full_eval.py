@@ -6,11 +6,12 @@ import os
 
 def main(args):
     eval_chrono_main(args)
-    visualize_eval([args.output_dir], args.eval_folder, accuracy=False)
+    visualize_eval(models=[args.output_dir], base=args.eval_folder, eval_plot_folder=args.eval_folder, accuracy=False)
     
     if os.path.exists(args.output_dir):
         shutil.rmtree(args.output_dir)
-        print(f"Deleted validation results folder: {args.output_dir}")
+        shutil.rmtree('/root/.cache/huggingface/hub')
+        print(f"Deleted validation results folder: {args.output_dir} and huggingface cache")
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
@@ -43,8 +44,8 @@ if __name__ == "__main__":
         help="Batch size"
     )
     parser.add_argument(
-        "--output-dir", "-od", type=str, default="outputs",
-        help="Directory to save outputs"
+        "--output-dir", "-od", type=str, nargs='+', default=["outputs"],
+        help="List of directories to save outputs"
     )
     parser.add_argument(
         "--time-align", action="store_true", help="include for time aligned evals"
