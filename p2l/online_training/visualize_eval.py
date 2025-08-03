@@ -133,10 +133,10 @@ def plot_cp_results(path, save_dir, model_name, title):
 def visualize_eval(models, base, eval_plot_folder, accuracy):
     os.makedirs(eval_plot_folder, exist_ok=True)
     for model_info in models:
-        if len(model_info) == 1:
-            model_eval = model_info[0]
+        if type(model_info) == str:
+            model_eval = model_info
             title = f"Validation Loss Across Model and Dataset Checkpoints for {model_eval.split('/')[-1]}"
-        if len(model_info) == 2:
+        elif len(model_info) == 2:
             model_eval, eps = model_info
             title = f'Replay Buffer (ε = {eps}) Validation Loss Across Model and Dataset Checkpoints'
         elif len(model_info) == 3:
@@ -145,7 +145,8 @@ def visualize_eval(models, base, eval_plot_folder, accuracy):
         elif len(model_info) == 4:
             model_eval, gamma, mu, step_size = model_info
             title = f'Exponential Buffer (γ = {gamma}, μ = {mu}, step size = {step_size}) Validation Loss Across Model and Dataset Checkpoints'
-        
+        else:
+            raise ValueError(f"Invalid model info: {model_info}")
         if accuracy:
             data_base = os.path.join(base, 'accuracy')
         else:
@@ -166,26 +167,10 @@ def visualize_eval(models, base, eval_plot_folder, accuracy):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    replay_models = model_list = [
-        ('/tmp/output_eps_0.2', 0.2), #(file_path, eps_val)
-        ('/tmp/output_eps_0.5', 0.5),
-        ('/tmp/output_eps_0.06', 0.06),
-        ('/tmp/output_eps_0.016', 0.016),
-        ('/tmp/output_eps_0.032', 0.032),
-        ('/tmp/output_eps_0.112', 0.112)
-    ]
-
-    geom_models = [
-        ('/tmp/output-geom-0.995-0.001', 0.995, 0.001), #(file_path, gamma val, sigma_val)
-        ('/tmp/output-geom-0.995-0.0005', 0.995, 0.0005),
-        ('/tmp/output-geom-0.999-0.001', 0.999, 0.001),
-        ('/tmp/output-geom-0.999-0.0005', 0.999, 0.0005),
-        ('/tmp/output-geom-0.9995-0.001', 0.9995, 0.001),
-        ('/tmp/output-geom-0.9995-0.0005', 0.9995, 0.0005),
-    ]
-    parser.add_argument("--output-file", type=str, default='checkpoint_results2', help='folder to save loss results')
+    parser.add_argument("--models", type=str, nargs='+', default=["outputs"], help='list of model directories to visualize')
+    parser.add_argument("--base", type=str, default='outputs', help='base directory to save loss results')
     parser.add_argument("--eval-folder", type=str, default='eval_plots2', help='folder to save eval plots')
     parser.add_argument("--extract-accuracy", action='store_true')
     args = parser.parse_args()
     
-    visualize_eval(replay_models + geom_models, args.output_file, args.eval_folder, args.extract_accuracy)
+    visualize_eval(args.models, args.base, args.eval_folder, args.extract_accuracy)

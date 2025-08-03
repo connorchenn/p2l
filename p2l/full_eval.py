@@ -44,8 +44,8 @@ if __name__ == "__main__":
         help="Batch size"
     )
     parser.add_argument(
-        "--output-dir", "-od", type=str, default="outputs",
-        help="Directory to save outputs"
+        "--output-dir", "-od", type=str, nargs='+', default=["outputs"],
+        help="List of directories to save outputs"
     )
     parser.add_argument(
         "--time-align", action="store_true", help="include for time aligned evals"
