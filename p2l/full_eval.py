@@ -6,7 +6,7 @@ import os
 
 def main(args):
     eval_chrono_main(args)
-    visualize_eval(args.output_dir, args.eval_folder, accuracy=False)
+    visualize_eval([args.output_dir], args.eval_folder, accuracy=False)
     
     if os.path.exists(args.output_dir):
         shutil.rmtree(args.output_dir)
