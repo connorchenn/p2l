@@ -16,7 +16,9 @@ def generate_expo(chrono_train_data, batch_size, gamma, mu, tstamp_file, use_min
     if save_batch_every is not None:
         batch_tracker = {}
         batch_tracker_list = []
-                
+    
+    os.makedirs(save_folder, exist_ok=True)
+    
     if use_min:
         save_path = f'{save_folder}/expo_gamma_{gamma}_mu_{mu}_step_{step_size}_min'
     else:
