@@ -89,7 +89,11 @@ def train_model(args):
     load_train_data_from_disk = config.get("load_train_data_from_disk", False)
     load_val_data_from_disk = config.get("load_val_data_from_disk", False)
     # List of batch indices to save checkpoints at (e.g., [10, 25, 256])
-    save_at_batches = config.get("save_at_batches", None)
+    if config.get("save_at_batches", None):
+        with open(config["save_at_batches"], "r") as file:
+            save_at_batches = json.load(file)['list']
+    else:
+        save_at_batches = None
 
     LOCAL_RANK = int(os.environ.get("LOCAL_RANK", -1))
 
